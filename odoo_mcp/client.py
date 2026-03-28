@@ -86,14 +86,14 @@ class OdooClient:
 
         payload = {
             "jsonrpc": "2.0",
-            "method": method,
+            "method": "call" if "/" in method else method,
             "params": params,
             "id": 1,
         }
 
         try:
             response = await self.client.post(
-                f"{self.url}/jsonrpc",
+                f"{self.url}/{method}" if "/" in method else f"{self.url}/jsonrpc",
                 json=payload,
             )
             response.raise_for_status()
@@ -254,6 +254,81 @@ class OdooClient:
         })
 
         return result is True
+
+    async def execute(
+        self,
+        model: str,
+        method: str,
+        args: Optional[List[Any]] = None,
+        kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """Execute an arbitrary method on a model.
+
+        Used for workflow methods like button_draft, action_post,
+        action_reverse, action_register_payment, etc.
+
+        Args:
+            model: Model name (e.g., 'account.move')
+            method: Method name (e.g., 'button_draft')
+            args: Positional arguments (typically [record_ids])
+            kwargs: Keyword arguments
+
+        Returns:
+            Method result
+        """
+        if not self.uid:
+            raise OdooClientError("Not connected")
+
+        call_args = [
+            self.db,
+            self.uid,
+            self.password,
+            model,
+            method,
+        ]
+        if args:
+            call_args.extend(args)
+
+        result = await self._rpc_call("call", {
+            "service": "object",
+            "method": "execute_kw",
+            "args": call_args,
+            **({"kwargs": kwargs} if kwargs else {}),
+        })
+
+        return result
+
+    async def search_count(
+        self,
+        model: str,
+        domain: List[Any],
+    ) -> int:
+        """Count records matching a domain.
+
+        Args:
+            model: Model name
+            domain: Search domain
+
+        Returns:
+            Number of matching records
+        """
+        if not self.uid:
+            raise OdooClientError("Not connected")
+
+        result = await self._rpc_call("call", {
+            "service": "object",
+            "method": "execute_kw",
+            "args": [
+                self.db,
+                self.uid,
+                self.password,
+                model,
+                "search_count",
+                [domain],
+            ],
+        })
+
+        return result if isinstance(result, int) else 0
 
     async def fields_get(
         self,

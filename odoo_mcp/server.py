@@ -1,3 +1,4 @@
+from __future__ import annotations
 #!/usr/bin/env python3
 """
 Odoo MCP Server — Full read/write access to Odoo 18 Accounting via JSON-RPC.
@@ -11,7 +12,7 @@ Provides tools for:
 import json
 import os
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date as _date, datetime
 from enum import Enum
 from typing import Any, Optional
 
@@ -34,7 +35,7 @@ load_dotenv()
 @asynccontextmanager
 async def app_lifespan(server: FastMCP):
     """Initialize the Odoo client on startup, close on shutdown."""
-    client = client_from_env()
+    client = await client_from_env()
     await client.connect()
     try:
         yield {"odoo": client}
@@ -47,7 +48,7 @@ mcp = FastMCP("odoo_mcp", lifespan=app_lifespan)
 
 def _get_client(ctx: Context) -> OdooClient:
     """Extract the Odoo client from the lifespan context."""
-    return ctx.request_context.lifespan_state["odoo"]
+    return ctx.request_context.lifespan_context["odoo"]
 
 
 # ---------------------------------------------------------------------------
@@ -109,18 +110,18 @@ async def get_chart_of_accounts(
     """
     client = _get_client(ctx)
     
-    domain = [('active', '=', True)] if filters and filters.active_only else []
+    domain = [('deprecated', '=', False)] if filters and filters.active_only else []
     if filters and filters.account_type:
-        domain.append(('user_type_id.type', '=', filters.account_type))
+        domain.append(('account_type', '=', filters.account_type))
     
-    accounts = await client.search_read('account.account', domain, ['code', 'name', 'user_type_id', 'balance'])
+    accounts = await client.search_read('account.account', domain, ['code', 'name', 'account_type', 'current_balance'])
     
     data = [
         {
             'Code': a.get('code'),
             'Name': a.get('name'),
-            'Type': a.get('user_type_id', [None, None])[1] if a.get('user_type_id') else 'Unknown',
-            'Balance': a.get('balance')
+            'Type': a.get('account_type', 'Unknown'),
+            'Balance': a.get('current_balance', 0.0)
         }
         for a in accounts
     ]
@@ -131,8 +132,8 @@ async def get_chart_of_accounts(
 class JournalEntriesFilters(BaseModel):
     """Filters for get_journal_entries."""
     journal: Optional[str] = Field(None, description="Filter by journal name (GJ, SJ, PJ, BJ)")
-    date_from: Optional[date] = Field(None, description="Start date (YYYY-MM-DD)")
-    date_to: Optional[date] = Field(None, description="End date (YYYY-MM-DD)")
+    date_from: Optional[str] = Field(None, description="Start date (YYYY-MM-DD)")
+    date_to: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
     posted_only: bool = Field(True, description="Only return posted entries")
 
 
@@ -183,7 +184,7 @@ async def get_journal_entries(
 class AccountBalanceInput(BaseModel):
     """Input for get_account_balance."""
     account_code: str = Field(..., description="Account code (e.g., 1000, 2110)")
-    date: Optional[date] = Field(None, description="Balance as of date (YYYY-MM-DD), defaults to today")
+    date: Optional[str] = Field(None, description="Balance as of date (YYYY-MM-DD), defaults to today")
 
 
 @mcp.tool()
@@ -252,8 +253,8 @@ class VendorBillsInput(BaseModel):
     """Input for get_vendor_bills."""
     vendor_name: Optional[str] = Field(None, description="Filter by vendor name (partial match)")
     state: Optional[str] = Field(None, description="Filter by state (draft, posted, paid, cancel)")
-    date_from: Optional[date] = Field(None, description="Start date (YYYY-MM-DD)")
-    date_to: Optional[date] = Field(None, description="End date (YYYY-MM-DD)")
+    date_from: Optional[str] = Field(None, description="Start date (YYYY-MM-DD)")
+    date_to: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
 
 
 @mcp.tool()
@@ -299,8 +300,8 @@ class CustomerInvoicesInput(BaseModel):
     """Input for get_customer_invoices."""
     customer_name: Optional[str] = Field(None, description="Filter by customer name (partial match)")
     state: Optional[str] = Field(None, description="Filter by state (draft, posted, paid, cancel)")
-    date_from: Optional[date] = Field(None, description="Start date (YYYY-MM-DD)")
-    date_to: Optional[date] = Field(None, description="End date (YYYY-MM-DD)")
+    date_from: Optional[str] = Field(None, description="Start date (YYYY-MM-DD)")
+    date_to: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
 
 
 @mcp.tool()
@@ -344,7 +345,7 @@ async def get_customer_invoices(ctx: Context, input: CustomerInvoicesInput) -> s
 
 class TrialBalanceInput(BaseModel):
     """Input for get_trial_balance."""
-    date: Optional[date] = Field(None, description="Trial balance as of date (YYYY-MM-DD), defaults to today")
+    date: Optional[str] = Field(None, description="Trial balance as of date (YYYY-MM-DD), defaults to today")
     account_type: Optional[str] = Field(None, description="Filter by account type (asset, liability, etc.)")
 
 
@@ -406,7 +407,7 @@ class JournalEntryLineInput(BaseModel):
 class CreateJournalEntryInput(BaseModel):
     """Input for create_journal_entry."""
     journal_name: str = Field(..., description="Journal name (GJ, SJ, PJ, BJ)")
-    date: date = Field(..., description="Entry date (YYYY-MM-DD)")
+    date: str = Field(..., description="Entry date (YYYY-MM-DD)")
     description: str = Field(..., description="Entry description")
     lines: list[JournalEntryLineInput] = Field(..., description="Journal entry lines (debit/credit)")
     
@@ -472,8 +473,8 @@ class CreateVendorBillInput(BaseModel):
     """Input for create_vendor_bill."""
     vendor_name: str = Field(..., description="Vendor name")
     bill_number: str = Field(..., description="Bill number / reference")
-    date: date = Field(..., description="Bill date (YYYY-MM-DD)")
-    due_date: date = Field(..., description="Due date (YYYY-MM-DD)")
+    date: str = Field(..., description="Bill date (YYYY-MM-DD)")
+    due_date: str = Field(..., description="Due date (YYYY-MM-DD)")
     lines: list[dict] = Field(..., description="Line items [{account_code, description, amount}]")
 
 
@@ -530,8 +531,8 @@ class CreateCustomerInvoiceInput(BaseModel):
     """Input for create_customer_invoice."""
     customer_name: str = Field(..., description="Customer name")
     invoice_number: str = Field(..., description="Invoice number")
-    date: date = Field(..., description="Invoice date (YYYY-MM-DD)")
-    due_date: date = Field(..., description="Due date (YYYY-MM-DD)")
+    date: str = Field(..., description="Invoice date (YYYY-MM-DD)")
+    due_date: str = Field(..., description="Due date (YYYY-MM-DD)")
     lines: list[dict] = Field(..., description="Line items [{account_code, description, amount}]")
 
 
@@ -588,7 +589,7 @@ class UpdateInvoiceInput(BaseModel):
     """Input for update_invoice."""
     invoice_id: int = Field(..., description="Invoice ID to update")
     invoice_number: Optional[str] = Field(None, description="New invoice number")
-    due_date: Optional[date] = Field(None, description="New due date (YYYY-MM-DD)")
+    due_date: Optional[str] = Field(None, description="New due date (YYYY-MM-DD)")
 
 
 @mcp.tool()
@@ -633,7 +634,7 @@ class ReconcileInvoiceInput(BaseModel):
     """Input for reconcile_invoice."""
     invoice_id: int = Field(..., description="Invoice ID to reconcile")
     payment_amount: float = Field(..., description="Payment amount")
-    payment_date: date = Field(..., description="Payment date (YYYY-MM-DD)")
+    payment_date: str = Field(..., description="Payment date (YYYY-MM-DD)")
     journal_name: str = Field(default="BJ", description="Bank journal name (default: BJ)")
 
 
@@ -720,7 +721,7 @@ async def post_invoice(ctx: Context, input: PostInvoiceInput) -> str:
 
 class CloseAccountingPeriodInput(BaseModel):
     """Input for close_accounting_period."""
-    period_date: date = Field(..., description="Month-end date (YYYY-MM-DD)")
+    period_date: str = Field(..., description="Month-end date (YYYY-MM-DD)")
 
 
 @mcp.tool()
@@ -774,7 +775,7 @@ async def close_accounting_period(ctx: Context, input: CloseAccountingPeriodInpu
 
 class GenerateFinancialStatementsInput(BaseModel):
     """Input for generate_financial_statements."""
-    period_date: date = Field(..., description="Period end date (YYYY-MM-DD)")
+    period_date: str = Field(..., description="Period end date (YYYY-MM-DD)")
     statement_type: str = Field(default="both", description="Type: income, balance, both")
 
 
@@ -833,7 +834,7 @@ async def generate_financial_statements(ctx: Context, input: GenerateFinancialSt
 
 class PostClosingEntriesInput(BaseModel):
     """Input for post_closing_entries."""
-    period_date: date = Field(..., description="Period end date (YYYY-MM-DD)")
+    period_date: str = Field(..., description="Period end date (YYYY-MM-DD)")
 
 
 @mcp.tool()
@@ -878,7 +879,7 @@ async def post_closing_entries(ctx: Context, input: PostClosingEntriesInput) -> 
 
 class ValidatePeriodClosureInput(BaseModel):
     """Input for validate_period_closure."""
-    period_date: date = Field(..., description="Period end date (YYYY-MM-DD)")
+    period_date: str = Field(..., description="Period end date (YYYY-MM-DD)")
 
 
 @mcp.tool()
@@ -918,10 +919,456 @@ async def validate_period_closure(ctx: Context, input: ValidatePeriodClosureInpu
     }, indent=2)
 
 
+# ---------------------------------------------------------------------------
+# PHASE 4: Generic Model Access (the escape hatch)
+# ---------------------------------------------------------------------------
+
+class GenericSearchReadInput(BaseModel):
+    """Input for odoo_search_read — the Swiss army knife."""
+    model: str = Field(..., description="Odoo model name (e.g., 'account.bank.statement.line', 'account.reconcile.model', 'res.currency.rate')")
+    domain: list = Field(default_factory=list, description="Search domain as list of tuples, e.g. [['state','=','posted']]")
+    fields: list[str] = Field(default_factory=list, description="Fields to return. Empty = all fields.")
+    limit: int = Field(80, description="Max records to return")
+    offset: int = Field(0, description="Skip first N records")
+    order: Optional[str] = Field(None, description="Sort order, e.g. 'date desc, id'")
+
+
+@mcp.tool()
+async def odoo_search_read(ctx: Context, input: GenericSearchReadInput) -> str:
+    """
+    Generic search_read on ANY Odoo model.
+
+    This is the escape hatch — use it to query any model with arbitrary
+    domain filters when no dedicated tool exists. Examples:
+      - Bank statement lines: model='account.bank.statement.line'
+      - Reconciliation models: model='account.reconcile.model'
+      - Exchange rates: model='res.currency.rate'
+      - Aged payables: model='account.move.line' with partner/date filters
+      - Tax codes: model='account.tax'
+    """
+    client = _get_client(ctx)
+
+    kwargs = {
+        "fields": input.fields or [],
+        "limit": input.limit,
+        "offset": input.offset,
+    }
+    if input.order:
+        kwargs["order"] = input.order
+
+    result = await client._rpc_call("call", {
+        "service": "object",
+        "method": "execute_kw",
+        "args": [
+            client.db, client.uid, client.password,
+            input.model, "search_read", [input.domain], kwargs,
+        ],
+    })
+
+    records = result if isinstance(result, list) else []
+    return _fmt(records, ResponseFormat.MARKDOWN, f"{input.model} ({len(records)} records)")
+
+
+class GenericFieldsGetInput(BaseModel):
+    """Input for odoo_fields_get."""
+    model: str = Field(..., description="Odoo model name")
+    attributes: list[str] = Field(default_factory=lambda: ["string", "type", "required", "readonly"], description="Field attributes to return")
+
+
+@mcp.tool()
+async def odoo_fields_get(ctx: Context, input: GenericFieldsGetInput) -> str:
+    """
+    Get field definitions for any Odoo model.
+
+    Use this to discover what fields exist on a model before querying it.
+    Returns field name, label, type, and other attributes.
+    """
+    client = _get_client(ctx)
+    result = await client.fields_get(input.model)
+
+    data = []
+    for fname, fdef in sorted(result.items()):
+        row = {"Field": fname}
+        for attr in input.attributes:
+            row[attr] = fdef.get(attr, "")
+        data.append(row)
+
+    return _fmt(data, ResponseFormat.MARKDOWN, f"Fields: {input.model}")
+
+
+# ---------------------------------------------------------------------------
+# PHASE 5: Entry Lifecycle
+# ---------------------------------------------------------------------------
+
+class EntryIdInput(BaseModel):
+    """Input with just an entry ID."""
+    entry_id: int = Field(..., description="account.move ID")
+
+
+@mcp.tool()
+async def reset_entry_to_draft(ctx: Context, input: EntryIdInput) -> str:
+    """
+    Reset a posted journal entry / invoice back to draft.
+
+    Calls button_draft on the account.move so it can be edited or deleted.
+    """
+    client = _get_client(ctx)
+    moves = await client.search_read("account.move", [("id", "=", input.entry_id)], ["state", "name"])
+    if not moves:
+        return f"Entry {input.entry_id} not found."
+    if moves[0]["state"] == "draft":
+        return f"Entry {moves[0]['name']} is already in draft."
+    await client.execute("account.move", "button_draft", [[input.entry_id]])
+    return json.dumps({"success": True, "entry_id": input.entry_id, "new_state": "draft", "message": f"Reset {moves[0]['name']} to draft"}, indent=2)
+
+
+@mcp.tool()
+async def post_entry(ctx: Context, input: EntryIdInput) -> str:
+    """
+    Post a draft journal entry / invoice / bill.
+
+    Calls action_post on account.move. Works for invoices, bills, AND MISC entries.
+    """
+    client = _get_client(ctx)
+    moves = await client.search_read("account.move", [("id", "=", input.entry_id)], ["state", "name"])
+    if not moves:
+        return f"Entry {input.entry_id} not found."
+    if moves[0]["state"] == "posted":
+        return f"Entry {moves[0]['name']} is already posted."
+    await client.execute("account.move", "action_post", [[input.entry_id]])
+    return json.dumps({"success": True, "entry_id": input.entry_id, "new_state": "posted", "message": f"Posted {moves[0]['name']}"}, indent=2)
+
+
+class ReverseEntryInput(BaseModel):
+    """Input for reverse_entry."""
+    entry_id: int = Field(..., description="account.move ID to reverse")
+    reversal_date: Optional[str] = Field(None, description="Date for the reversal entry (YYYY-MM-DD). Defaults to original date.")
+    reason: Optional[str] = Field(None, description="Reason for reversal")
+
+
+@mcp.tool()
+async def reverse_entry(ctx: Context, input: ReverseEntryInput) -> str:
+    """
+    Reverse a posted journal entry.
+
+    Creates a counter-entry that cancels the original. The original stays posted.
+    """
+    client = _get_client(ctx)
+    moves = await client.search_read("account.move", [("id", "=", input.entry_id)], ["state", "name", "date"])
+    if not moves:
+        return f"Entry {input.entry_id} not found."
+    if moves[0]["state"] != "posted":
+        return f"Can only reverse posted entries. Current state: {moves[0]['state']}"
+
+    wizard_vals = {
+        "move_ids": [(6, 0, [input.entry_id])],
+        "date": input.reversal_date or moves[0]["date"],
+        "reason": input.reason or "Reversal",
+        "journal_id": False,
+    }
+    try:
+        wiz_id = await client.create("account.move.reversal", wizard_vals)
+        result = await client.execute("account.move.reversal", "reverse_moves", [[wiz_id]])
+        return json.dumps({"success": True, "original_id": input.entry_id, "result": str(result), "message": f"Reversed {moves[0]['name']}"}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# PHASE 6: Payment Registration
+# ---------------------------------------------------------------------------
+
+class RegisterPaymentInput(BaseModel):
+    """Input for register_payment."""
+    invoice_id: int = Field(..., description="account.move ID of the invoice/bill to pay")
+    amount: float = Field(..., description="Payment amount")
+    payment_date: str = Field(..., description="Payment date (YYYY-MM-DD)")
+    journal_code: Optional[str] = Field(None, description="Bank journal code (e.g., 'BNK1'). Auto-detected if omitted.")
+    memo: Optional[str] = Field(None, description="Payment memo/reference")
+
+
+@mcp.tool()
+async def register_payment(ctx: Context, input: RegisterPaymentInput) -> str:
+    """
+    Register a payment against an invoice or vendor bill.
+
+    Uses Odoo's account.payment.register wizard — the same as clicking
+    'Register Payment' in the UI. Handles partial and full payments.
+    """
+    client = _get_client(ctx)
+    moves = await client.search_read("account.move", [("id", "=", input.invoice_id)], ["state", "name", "move_type", "amount_residual", "partner_id"])
+    if not moves:
+        return f"Invoice {input.invoice_id} not found."
+    inv = moves[0]
+    if inv["state"] != "posted":
+        return f"Can only pay posted invoices. State: {inv['state']}"
+
+    wizard_vals = {"payment_date": input.payment_date, "amount": input.amount}
+    if input.memo:
+        wizard_vals["communication"] = input.memo
+    if input.journal_code:
+        journals = await client.search_read("account.journal", [("code", "=", input.journal_code)], ["id"])
+        if journals:
+            wizard_vals["journal_id"] = journals[0]["id"]
+
+    try:
+        ctx_vals = {"active_model": "account.move", "active_ids": [input.invoice_id]}
+        wiz_id = await client.execute("account.payment.register", "create", [[wizard_vals]], {"context": ctx_vals})
+        result = await client.execute("account.payment.register", "action_create_payments", [[wiz_id]])
+        return json.dumps({"success": True, "invoice": inv["name"], "amount": input.amount, "message": f"Payment registered for {inv['name']}"}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# PHASE 7: Bank Statement Tools
+# ---------------------------------------------------------------------------
+
+class BankStatementLinesInput(BaseModel):
+    """Input for get_bank_statement_lines."""
+    journal_code: Optional[str] = Field(None, description="Bank journal code (BNK1, BNK2, etc.)")
+    is_reconciled: Optional[bool] = Field(None, description="Filter by reconciliation status")
+    date_from: Optional[str] = Field(None, description="Start date (YYYY-MM-DD)")
+    date_to: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
+    limit: int = Field(100, description="Max records")
+
+
+@mcp.tool()
+async def get_bank_statement_lines(ctx: Context, input: BankStatementLinesInput) -> str:
+    """
+    List bank statement lines with reconciliation status.
+
+    Shows unreconciled transactions sitting in the bank suspense account (26291).
+    Filter by journal (BNK1-4), date range, and reconciliation status.
+    """
+    client = _get_client(ctx)
+    domain = []
+    if input.journal_code:
+        domain.append(("journal_id.code", "=", input.journal_code))
+    if input.is_reconciled is not None:
+        domain.append(("is_reconciled", "=", input.is_reconciled))
+    if input.date_from:
+        domain.append(("date", ">=", input.date_from))
+    if input.date_to:
+        domain.append(("date", "<=", input.date_to))
+
+    lines = await client.search_read(
+        "account.bank.statement.line", domain,
+        ["date", "payment_ref", "amount", "partner_id", "journal_id", "is_reconciled"],
+        limit=input.limit,
+    )
+    data = [
+        {
+            "Date": l.get("date"),
+            "Ref": l.get("payment_ref", ""),
+            "Amount": l.get("amount"),
+            "Partner": (l.get("partner_id") or [None, ""])[1],
+            "Journal": (l.get("journal_id") or [None, ""])[1],
+            "Reconciled": l.get("is_reconciled"),
+        }
+        for l in lines
+    ]
+    return _fmt(data, ResponseFormat.MARKDOWN, f"Bank Statement Lines ({len(data)} records)")
+
+
+# ---------------------------------------------------------------------------
+# PHASE 8: Reporting
+# ---------------------------------------------------------------------------
+
+class PLReportInput(BaseModel):
+    """Input for pnl_report."""
+    date_from: str = Field(..., description="Period start (YYYY-MM-DD)")
+    date_to: str = Field(..., description="Period end (YYYY-MM-DD)")
+    posted_only: bool = Field(True, description="Only include posted entries")
+
+
+@mcp.tool()
+async def pnl_report(ctx: Context, input: PLReportInput) -> str:
+    """
+    Profit & Loss report for a date range.
+
+    Sums journal entry lines by account for income and expense accounts.
+    Supports posted-only filtering (critical for month-end comparison vs Excel).
+    """
+    client = _get_client(ctx)
+    domain = [("date", ">=", input.date_from), ("date", "<=", input.date_to)]
+    if input.posted_only:
+        domain.append(("move_id.state", "=", "posted"))
+    domain.append(("account_id.account_type", "in", ["income", "income_other", "expense", "expense_depreciation", "expense_direct_cost"]))
+
+    lines = await client.search_read("account.move.line", domain, ["account_id", "debit", "credit", "balance"], limit=5000)
+
+    acct_totals = {}
+    for l in lines:
+        acct = (l.get("account_id") or [None, "Unknown"])[1]
+        acct_totals.setdefault(acct, {"debit": 0, "credit": 0, "balance": 0})
+        acct_totals[acct]["debit"] += l.get("debit", 0)
+        acct_totals[acct]["credit"] += l.get("credit", 0)
+        acct_totals[acct]["balance"] += l.get("balance", 0)
+
+    data = [{"Account": k, "Debit": v["debit"], "Credit": v["credit"], "Balance": v["balance"]} for k, v in sorted(acct_totals.items())]
+    total = sum(v["balance"] for v in acct_totals.values())
+    data.append({"Account": "=== NET P&L ===", "Debit": "", "Credit": "", "Balance": total})
+    return _fmt(data, ResponseFormat.MARKDOWN, f"P&L {input.date_from} to {input.date_to}")
+
+
+class VATSummaryInput(BaseModel):
+    """Input for vat_summary."""
+    date_from: str = Field(..., description="Period start (YYYY-MM-DD)")
+    date_to: str = Field(..., description="Period end (YYYY-MM-DD)")
+
+
+@mcp.tool()
+async def vat_summary(ctx: Context, input: VATSummaryInput) -> str:
+    """
+    VAT summary by tax code for a period.
+
+    Shows totals for each tax code — useful for VAT filing prep.
+    """
+    client = _get_client(ctx)
+    domain = [("date", ">=", input.date_from), ("date", "<=", input.date_to), ("tax_line_id", "!=", False), ("move_id.state", "=", "posted")]
+    lines = await client.search_read("account.move.line", domain, ["tax_line_id", "debit", "credit", "balance"], limit=5000)
+
+    tax_totals = {}
+    for l in lines:
+        tax = (l.get("tax_line_id") or [None, "Unknown"])[1]
+        tax_totals.setdefault(tax, {"debit": 0, "credit": 0, "balance": 0})
+        tax_totals[tax]["debit"] += l.get("debit", 0)
+        tax_totals[tax]["credit"] += l.get("credit", 0)
+        tax_totals[tax]["balance"] += l.get("balance", 0)
+
+    data = [{"Tax": k, "Debit": v["debit"], "Credit": v["credit"], "Balance": v["balance"]} for k, v in sorted(tax_totals.items())]
+    return _fmt(data, ResponseFormat.MARKDOWN, f"VAT Summary {input.date_from} to {input.date_to}")
+
+
+class AgedBalanceInput(BaseModel):
+    """Input for aged_receivables_payables."""
+    balance_type: str = Field("receivable", description="'receivable' or 'payable'")
+    as_of_date: Optional[str] = Field(None, description="As of date (YYYY-MM-DD), defaults to today")
+
+
+@mcp.tool()
+async def aged_receivables_payables(ctx: Context, input: AgedBalanceInput) -> str:
+    """
+    Aged receivables or payables by partner.
+
+    Shows outstanding balances with partner names. Use balance_type='receivable'
+    for customers, 'payable' for vendors.
+    """
+    client = _get_client(ctx)
+    acct_type = "asset_receivable" if input.balance_type == "receivable" else "liability_payable"
+    domain = [("account_id.account_type", "=", acct_type), ("reconciled", "=", False), ("move_id.state", "=", "posted")]
+    if input.as_of_date:
+        domain.append(("date", "<=", input.as_of_date))
+
+    lines = await client.search_read("account.move.line", domain, ["partner_id", "date_maturity", "amount_residual", "move_id"], limit=2000)
+
+    partner_totals = {}
+    for l in lines:
+        partner = (l.get("partner_id") or [None, "Unknown"])[1]
+        partner_totals.setdefault(partner, 0)
+        partner_totals[partner] += l.get("amount_residual", 0)
+
+    data = [{"Partner": k, "Outstanding": v} for k, v in sorted(partner_totals.items(), key=lambda x: abs(x[1]), reverse=True)]
+    total = sum(v for v in partner_totals.values())
+    data.append({"Partner": "=== TOTAL ===", "Outstanding": total})
+    label = "Aged Receivables" if input.balance_type == "receivable" else "Aged Payables"
+    return _fmt(data, ResponseFormat.MARKDOWN, label)
+
+
+# ---------------------------------------------------------------------------
+# PHASE 9: Currency / FX
+# ---------------------------------------------------------------------------
+
+class FXRatesInput(BaseModel):
+    """Input for get_exchange_rates."""
+    currency_name: Optional[str] = Field(None, description="Currency code (USD, GBP, etc.). Omit for all.")
+    date_from: Optional[str] = Field(None, description="Start date")
+    date_to: Optional[str] = Field(None, description="End date")
+    limit: int = Field(50, description="Max records")
+
+
+@mcp.tool()
+async def get_exchange_rates(ctx: Context, input: FXRatesInput) -> str:
+    """
+    Get exchange rates from res.currency.rate.
+
+    Shows rate history for one or all currencies.
+    """
+    client = _get_client(ctx)
+    domain = []
+    if input.currency_name:
+        domain.append(("currency_id.name", "=", input.currency_name))
+    if input.date_from:
+        domain.append(("name", ">=", input.date_from))
+    if input.date_to:
+        domain.append(("name", "<=", input.date_to))
+
+    rates = await client.search_read("res.currency.rate", domain, ["currency_id", "name", "rate", "company_rate"], limit=input.limit)
+    data = [{"Currency": (r.get("currency_id") or [None, ""])[1], "Date": r.get("name"), "Rate": r.get("rate"), "Company Rate": r.get("company_rate")} for r in rates]
+    return _fmt(data, ResponseFormat.MARKDOWN, "Exchange Rates")
+
+
+class SetFXRateInput(BaseModel):
+    """Input for set_exchange_rate."""
+    currency_name: str = Field(..., description="Currency code (USD, GBP)")
+    rate_date: str = Field(..., description="Rate date (YYYY-MM-DD)")
+    rate: float = Field(..., description="Exchange rate (units of this currency per 1 base currency)")
+
+
+@mcp.tool()
+async def set_exchange_rate(ctx: Context, input: SetFXRateInput) -> str:
+    """
+    Set an exchange rate for a currency on a specific date.
+
+    Creates or updates the res.currency.rate record.
+    """
+    client = _get_client(ctx)
+    currencies = await client.search_read("res.currency", [("name", "=", input.currency_name)], ["id"])
+    if not currencies:
+        return f"Currency {input.currency_name} not found."
+
+    existing = await client.search_read("res.currency.rate", [("currency_id", "=", currencies[0]["id"]), ("name", "=", input.rate_date)], ["id"])
+    if existing:
+        await client.write("res.currency.rate", [existing[0]["id"]], {"rate": input.rate})
+        return json.dumps({"success": True, "action": "updated", "currency": input.currency_name, "date": input.rate_date, "rate": input.rate}, indent=2)
+    else:
+        rate_id = await client.create("res.currency.rate", {"currency_id": currencies[0]["id"], "name": input.rate_date, "rate": input.rate})
+        return json.dumps({"success": True, "action": "created", "id": rate_id, "currency": input.currency_name, "date": input.rate_date, "rate": input.rate}, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# PHASE 10: Generic Execute (call any model method)
+# ---------------------------------------------------------------------------
+
+class GenericExecuteInput(BaseModel):
+    """Input for odoo_execute."""
+    model: str = Field(..., description="Odoo model name")
+    method: str = Field(..., description="Method to call (e.g., 'button_draft', 'action_post')")
+    record_ids: list[int] = Field(default_factory=list, description="Record IDs to act on")
+    kwargs: Optional[dict] = Field(None, description="Additional keyword arguments")
+
+
+@mcp.tool()
+async def odoo_execute(ctx: Context, input: GenericExecuteInput) -> str:
+    """
+    Execute any method on any Odoo model.
+
+    The ultimate escape hatch — call button_draft, action_post, action_reverse,
+    or any other workflow method directly. Use when no dedicated tool exists.
+    """
+    client = _get_client(ctx)
+    try:
+        result = await client.execute(input.model, input.method, [input.record_ids], input.kwargs)
+        return json.dumps({"success": True, "model": input.model, "method": input.method, "result": str(result)}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
 def main():
     """Run the MCP server."""
     import asyncio
-    asyncio.run(mcp.run())
+    mcp.run()
 
 
 if __name__ == "__main__":
